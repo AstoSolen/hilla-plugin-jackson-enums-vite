@@ -1,150 +1,122 @@
-# hilla-plugin-jackson-enums
+# hilla-plugin-jackson-enums-vite
 
-A Vaadin Hilla generator extension for keeping generated TypeScript enum values aligned with the values used by Jackson at runtime.
+Vite plugin that rewrites Hilla-generated TypeScript enum values to match Jackson `@JsonProperty` wire values.
 
-Hilla can derive enum values from Java constant names, while Jackson may serialize those constants under different wire values, for example through `@JsonProperty`. This package applies an explicit mapping after, or during, generation so frontend code can use API enum values directly.
+Hilla emits TypeScript enums where each member's value equals the Java constant name. When Jackson serializes those constants under different wire values via `@JsonProperty`, the frontend receives the wire value but looks up the constant name in its registry — every render keyed on that enum silently fails.
 
-## What It Does
+This plugin patches the enum source as Vite serves or bundles it. The wire value comes from a sidecar JSON file produced by your build.
 
-Given a Java enum whose runtime JSON values differ from its constant names:
+## The mismatch
+
+Given a Java enum where the wire form differs from the constant name:
 
 ```java
-public enum ExampleType {
-    @JsonProperty("primary") PRIMARY,
-    @JsonProperty("secondary") SECONDARY
+public enum SomeEnum {
+    @JsonProperty("...") FIRST_CONSTANT,
+    @JsonProperty("...") SECOND_CONSTANT
 }
 ```
 
-Hilla may generate:
+Hilla generates:
+```ts
+enum SomeEnum {
+    FIRST_CONSTANT  = "FIRST_CONSTANT",
+    SECOND_CONSTANT = "SECOND_CONSTANT",
+}
+```
+
+This plugin makes Vite serve instead:
+```ts
+enum SomeEnum {
+    FIRST_CONSTANT  = "<wire-value-1>",
+    SECOND_CONSTANT = "<wire-value-2>",
+}
+```
+
+Code that looks up the enum by its API-returned string now finds the right member.
+
+## Why a Vite plugin specifically
+
+In Vaadin dev mode (`frontendHotdeploy = true`), Vaadin regenerates the TypeScript files inside `src/main/frontend/generated/` at application startup. A disk-level post-processor would be overwritten. The Vite plugin transforms files as they leave Vite — after any regeneration, before the browser sees them. The same path is used during a production build (`vaadinBuildFrontend`).
+
+## Install
+
+```bash
+npm install --save-dev hilla-plugin-jackson-enums-vite
+```
+
+## Usage
 
 ```ts
-enum ExampleType {
-    PRIMARY = "PRIMARY",
-    SECONDARY = "SECONDARY",
-}
+// vite.config.ts
+import type { UserConfigFn } from "vite";
+import { overrideVaadinConfig } from "./vite.generated";
+import { hillaJacksonEnums } from "hilla-plugin-jackson-enums-vite";
+
+const customConfig: UserConfigFn = () => ({
+    plugins: [hillaJacksonEnums()],
+});
+
+export default overrideVaadinConfig(customConfig);
 ```
 
-With a mapping file, this package rewrites the generated enum to:
+That is the entire integration. The plugin reads the sidecar JSON, finds enum files in the generated tree, and rewrites member initializers in place.
+
+## Options
 
 ```ts
-enum ExampleType {
-    PRIMARY = "primary",
-    SECONDARY = "secondary",
-}
+hillaJacksonEnums({
+    sidecarPath: "build/my-mappings.json",          // default "build/hilla-jackson-enum-mappings.json"
+    isGenerated: (id) => /custom-pattern/.test(id), // default: any .ts under /frontend/generated/
+    fileIdToFqn: (id) => "...",                     // override file path → Java FQN mapping
+});
 ```
 
-## Core Idea
+By default the plugin searches for the sidecar at:
 
-The package does not inspect Java source code. It consumes a sidecar JSON file that describes how Java enum constants map to their JSON wire values:
+1. `<vite-root>/../../../build/hilla-jackson-enum-mappings.json` — matches Vaadin's layout where `config.root` is `src/main/frontend`.
+2. `<vite-root>/build/hilla-jackson-enum-mappings.json` — matches standalone Vite projects.
+3. `process.cwd()/build/hilla-jackson-enum-mappings.json`
+
+The first existing path wins. A missing sidecar logs a warning; the plugin then no-ops.
+
+The plugin reacts to changes in the sidecar via Vite HMR — if your backend rebuild rewrites it, the next request picks up the new mappings without restarting the dev server.
+
+## Sidecar format
 
 ```json
 {
-  "com.example.ExampleType": {
-    "PRIMARY": "primary",
-    "SECONDARY": "secondary"
-  }
-}
-```
-
-The sidecar can be produced by any build process that can inspect the compiled application model, source metadata, generated OpenAPI data, or another trusted source of enum serialization rules.
-
-## Installation
-
-```bash
-npm install --save-dev hilla-plugin-jackson-enums
-```
-
-## Usage Modes
-
-### Post-Process Generated Files
-
-Use the CLI when Hilla generation is already handled by another tool and you only need to adjust the emitted TypeScript files:
-
-```bash
-npx hilla-plugin-jackson-enums ./build/hilla-jackson-enum-mappings.json ./src/main/frontend/generated
-```
-
-The command walks the generated TypeScript directory, matches file paths to fully qualified enum names, and rewrites enum member initializers where mappings exist. Files without mappings are left unchanged.
-
-### Hilla Generator Plugin
-
-Use the generator plugin when your build invokes the Hilla generator directly and can pass custom plugins:
-
-```bash
-HILLA_JACKSON_ENUM_MAPPINGS=./build/hilla-jackson-enum-mappings.json \
-  npx @vaadin/hilla-generator-cli openapi.json \
-    -o src/main/frontend/generated \
-    -p ./node_modules/hilla-plugin-jackson-enums/dist/index.js
-```
-
-In this mode, the plugin reads mappings before generated sources are written and updates matching enum AST nodes in the generator pipeline.
-
-### Library API
-
-Use the rewriter directly when embedding the behavior in custom tooling:
-
-```ts
-import ts from "typescript";
-import { rewriteEnumMembers } from "hilla-plugin-jackson-enums/rewriter";
-import { loadSidecar } from "hilla-plugin-jackson-enums/sidecar";
-
-const mappings = loadSidecar("./build/hilla-jackson-enum-mappings.json");
-const source = ts.createSourceFile("ExampleType.ts", code, ts.ScriptTarget.ES2022, false);
-
-const result = rewriteEnumMembers(source, mappings?.["com.example.ExampleType"] ?? {});
-```
-
-## Sidecar Format
-
-The sidecar JSON is a nested object:
-
-```json
-{
-  "fully.qualified.EnumName": {
-    "JAVA_CONSTANT": "wire-value"
+  "<fully.qualified.EnumName>": {
+    "<JAVA_CONSTANT_NAME>": "<wire-value>"
   }
 }
 ```
 
 - Top-level keys are fully qualified Java enum names.
 - Inner keys are Java enum constant names.
-- Inner values are the string values expected in JSON.
-- Constants omitted from the sidecar are not changed.
-- Missing or invalid sidecar files are treated as no-op by the plugin mode.
+- Inner values are the strings Jackson uses on the wire.
+- Constants without an entry are left untouched.
 
-## Integration Notes
+## Producing the sidecar
 
-The only hard requirement is that sidecar keys match the generated TypeScript source names seen by the package.
+The plugin only reads the sidecar — it never inspects Java sources or compiled classes itself.
 
-For the CLI, a generated file such as:
+The companion Gradle plugin [`io.github.astosolen.hilla-jackson-enums`](https://plugins.gradle.org/plugin/io.github.astosolen.hilla-jackson-enums) generates the sidecar automatically from your project's compiled classes via reflection on `@JsonProperty`. Apply it in your `build.gradle.kts`:
 
-```text
-src/main/frontend/generated/com/example/ExampleType.ts
+```kotlin
+plugins {
+    id("io.github.astosolen.hilla-jackson-enums") version "0.1.0"
+}
 ```
 
-is matched as:
+For Maven / non-Gradle setups, produce the JSON in the format above by any means you prefer (annotation processor, runtime scan, hand-written) and point the plugin at it via `sidecarPath`.
 
-```text
-com.example.ExampleType
-```
+## Behavior notes
 
-Typical integrations follow this flow:
-
-1. Generate or collect enum wire-value mappings during the backend build.
-2. Write those mappings to a JSON sidecar file.
-3. Run Hilla generation.
-4. Run this package as either a generator plugin or a post-generation rewrite step.
-
-## Configuration
-
-`HILLA_JACKSON_ENUM_MAPPINGS` sets the sidecar path for generator-plugin mode. If omitted, the plugin looks for:
-
-```text
-build/hilla-jackson-enum-mappings.json
-```
-
-The CLI receives the sidecar path as its first argument and does not use this environment variable.
+- The transformation matches enum members emitted as `<NAME> = "<NAME>"` (Hilla's default). Already-rewritten files are skipped automatically — idempotent.
+- The plugin runs with `enforce: 'pre'`, ahead of Vite's TypeScript transform, so the rewritten code is what TypeScript sees.
+- Member names not present in the sidecar are not touched. Files whose path does not resolve to a known FQN are not touched.
 
 ## License
 
-MIT
+MIT.

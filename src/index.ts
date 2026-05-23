@@ -1,55 +1,113 @@
-import Plugin from "@vaadin/hilla-generator-core/Plugin.js";
-import type { SharedStorage } from "@vaadin/hilla-generator-core/SharedStorage.js";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import type { Plugin } from "vite";
 
-import { loadSidecar } from "./sidecar.js";
-import { rewriteEnumMembers } from "./rewriter.js";
+import { loadSidecar, type EnumMappings } from "./sidecar.js";
 
-const DEFAULT_SIDECAR_PATH = "build/hilla-jackson-enum-mappings.json";
-const SIDECAR_PATH_ENV = "HILLA_JACKSON_ENUM_MAPPINGS";
+export interface ViteHillaJacksonEnumsOptions {
+    /**
+     * Path to the sidecar JSON file. Can be absolute or relative.
+     * If relative, resolved against several candidate roots (Vite root, its parents, process.cwd()).
+     * Defaults to "build/hilla-jackson-enum-mappings.json".
+     */
+    sidecarPath?: string;
 
-export default class JacksonEnumsPlugin extends Plugin {
-    override get path(): string {
-        return import.meta.url;
-    }
+    /**
+     * Predicate used to decide whether a given module id should be considered for rewriting.
+     * Default matches any `.ts` file whose path contains `/frontend/generated/`.
+     */
+    isGenerated?: (id: string) => boolean;
 
-    override async execute(storage: SharedStorage): Promise<void> {
-        const sidecarPath = resolveSidecarPath();
-        const mappings = loadSidecar(sidecarPath);
+    /**
+     * Maps a module id to the fully-qualified Java type name used as the sidecar key.
+     * Default extracts the path segment after `/frontend/generated/` and replaces `/` with `.`.
+     */
+    fileIdToFqn?: (id: string) => string;
+}
 
-        if (mappings === null) {
-            this.logger.warn(
-                `[hilla-plugin-jackson-enums] Sidecar mappings not found or invalid at ${sidecarPath} — skipping enum rewrite.`,
-            );
-            return;
-        }
+const DEFAULT_SIDECAR = "build/hilla-jackson-enum-mappings.json";
 
-        for (let i = 0; i < storage.sources.length; i++) {
-            const source = storage.sources[i];
-            if (source === undefined) continue;
+export default hillaJacksonEnums;
 
-            const fqn = filePathToFqn(source.fileName);
-            const mapping = mappings[fqn];
-            if (mapping === undefined) continue;
+export function hillaJacksonEnums(options: ViteHillaJacksonEnumsOptions = {}): Plugin {
+    const sidecarRelative = options.sidecarPath ?? DEFAULT_SIDECAR;
+    const isGenerated = options.isGenerated ?? defaultIsGenerated;
+    const fileIdToFqn = options.fileIdToFqn ?? defaultFileIdToFqn;
 
-            const { source: rewritten, changed } = rewriteEnumMembers(source, mapping);
-            if (changed) {
-                storage.sources[i] = rewritten;
-                this.logger.debug(`[hilla-plugin-jackson-enums] Rewrote enum members in ${fqn}`);
+    let sidecarAbs = "";
+    let mappings: EnumMappings | null = null;
+
+    return {
+        name: "hilla-jackson-enums",
+        enforce: "pre",
+        configResolved(config) {
+            sidecarAbs = resolveSidecarPath(sidecarRelative, config.root);
+            mappings = loadSidecar(sidecarAbs);
+            if (mappings === null) {
+                config.logger.warn(
+                    `[hilla-jackson-enums] sidecar not found at ${sidecarAbs} — generated enum values will not be rewritten`,
+                );
             }
-        }
-    }
+        },
+        handleHotUpdate(ctx) {
+            if (ctx.file === sidecarAbs) {
+                mappings = loadSidecar(sidecarAbs);
+                return [...ctx.modules];
+            }
+            return undefined;
+        },
+        transform(code, id) {
+            if (mappings === null) return null;
+            if (!isGenerated(id)) return null;
+            const fqn = fileIdToFqn(id);
+            const mapping = mappings[fqn];
+            if (!mapping) return null;
+            const rewritten = rewriteEnumMembersString(code, mapping);
+            return rewritten === null ? null : { code: rewritten, map: null };
+        },
+    };
 }
 
-function resolveSidecarPath(): string {
-    const fromEnv = process.env[SIDECAR_PATH_ENV];
-    if (fromEnv && fromEnv.length > 0) return resolve(fromEnv);
-    return resolve(process.cwd(), DEFAULT_SIDECAR_PATH);
+function resolveSidecarPath(sidecarPath: string, viteRoot: string): string {
+    if (isAbsolute(sidecarPath)) return sidecarPath;
+    const candidates = [
+        // Vaadin sets vite root to src/main/frontend; sidecar is at <project-root>/build/...
+        resolve(viteRoot, "../../..", sidecarPath),
+        resolve(viteRoot, sidecarPath),
+        resolve(process.cwd(), sidecarPath),
+    ];
+    return candidates.find((p) => existsSync(p)) ?? candidates[0]!;
 }
 
-function filePathToFqn(fileName: string): string {
-    const normalized = fileName.replace(/\\/g, "/");
-    const withoutExt = normalized.endsWith(".ts") ? normalized.slice(0, -3) : normalized;
-    const trimmed = withoutExt.replace(/^\/+/, "");
-    return trimmed.replace(/\//g, ".");
+function isAbsolute(p: string): boolean {
+    return /^([a-zA-Z]:)?[\\/]/.test(p);
+}
+
+function defaultIsGenerated(id: string): boolean {
+    if (!id.endsWith(".ts")) return false;
+    return id.includes("/frontend/generated/") || id.includes("\\frontend\\generated\\");
+}
+
+function defaultFileIdToFqn(id: string): string {
+    const normalized = id.replace(/\\/g, "/").split("?")[0]!;
+    const marker = "/frontend/generated/";
+    const idx = normalized.indexOf(marker);
+    if (idx < 0) return "";
+    const sub = normalized.slice(idx + marker.length);
+    const noExt = sub.endsWith(".ts") ? sub.slice(0, -3) : sub;
+    return noExt.replace(/\//g, ".");
+}
+
+function rewriteEnumMembersString(code: string, mapping: Readonly<Record<string, string>>): string | null {
+    let changed = false;
+    const result = code.replace(
+        /^(\s*)([A-Z_][A-Z_0-9]*)\s*=\s*"\2"\s*(,?)(\s*)$/gm,
+        (match, indent, name, comma, trail) => {
+            const wire = mapping[name];
+            if (wire === undefined) return match;
+            changed = true;
+            return `${indent}${name} = "${wire}"${comma}${trail}`;
+        },
+    );
+    return changed ? result : null;
 }

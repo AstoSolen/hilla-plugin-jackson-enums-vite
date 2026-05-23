@@ -1,7 +1,7 @@
 {
-  "name": "hilla-plugin-jackson-enums",
+  "name": "hilla-plugin-jackson-enums-vite",
   "version": "0.1.0",
-  "description": "Hilla generator plugin that rewrites TypeScript enum values from a sidecar JSON mapping. Use it to make generated TS enums respect Jackson @JsonProperty annotations on Java enum constants.",
+  "description": "Vite plugin that rewrites Hilla-generated TypeScript enum values to match Jackson @JsonProperty wire values from a sidecar JSON.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -9,18 +9,7 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    },
-    "./rewriter": {
-      "import": "./dist/rewriter.js",
-      "types": "./dist/rewriter.d.ts"
-    },
-    "./sidecar": {
-      "import": "./dist/sidecar.js",
-      "types": "./dist/sidecar.d.ts"
     }
-  },
-  "bin": {
-    "hilla-plugin-jackson-enums": "dist/cli.js"
   },
   "files": [
     "dist",
@@ -30,26 +19,27 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
-    "clean": "rimraf dist"
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [
+    "vite",
+    "vite-plugin",
     "hilla",
     "vaadin",
     "jackson",
     "enum",
     "json-property",
-    "generator-plugin",
     "typescript"
   ],
+  "author": "astosolen",
   "license": "MIT",
   "peerDependencies": {
-    "@vaadin/hilla-generator-core": ">=24.0.0",
-    "typescript": ">=5.0.0"
+    "vite": ">=5.0.0"
   },
   "devDependencies": {
-    "@vaadin/hilla-generator-core": "25.0.3",
-    "@vaadin/hilla-generator-utils": "25.0.3",
     "@types/node": "^22.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vite": "^7.3.3"
   }
 }
