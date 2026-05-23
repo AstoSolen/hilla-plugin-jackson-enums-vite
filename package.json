@@ -1,0 +1,55 @@
+{
+  "name": "hilla-plugin-jackson-enums",
+  "version": "0.1.0",
+  "description": "Hilla generator plugin that rewrites TypeScript enum values from a sidecar JSON mapping. Use it to make generated TS enums respect Jackson @JsonProperty annotations on Java enum constants.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./rewriter": {
+      "import": "./dist/rewriter.js",
+      "types": "./dist/rewriter.d.ts"
+    },
+    "./sidecar": {
+      "import": "./dist/sidecar.js",
+      "types": "./dist/sidecar.d.ts"
+    }
+  },
+  "bin": {
+    "hilla-plugin-jackson-enums": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "clean": "rimraf dist"
+  },
+  "keywords": [
+    "hilla",
+    "vaadin",
+    "jackson",
+    "enum",
+    "json-property",
+    "generator-plugin",
+    "typescript"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@vaadin/hilla-generator-core": ">=24.0.0",
+    "typescript": ">=5.0.0"
+  },
+  "devDependencies": {
+    "@vaadin/hilla-generator-core": "25.0.3",
+    "@vaadin/hilla-generator-utils": "25.0.3",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  }
+}
