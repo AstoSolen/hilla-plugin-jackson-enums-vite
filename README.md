@@ -101,11 +101,11 @@ The plugin reacts to changes in the sidecar via Vite HMR — if your backend reb
 
 The plugin only reads the sidecar — it never inspects Java sources or compiled classes itself.
 
-The companion Gradle plugin [`io.github.astosolen.hilla-jackson-enums`](https://plugins.gradle.org/plugin/io.github.astosolen.hilla-jackson-enums) generates the sidecar automatically from your project's compiled classes via reflection on `@JsonProperty`. Apply it in your `build.gradle.kts`:
+The companion Gradle plugin [`io.github.lowsortwizard.hilla-jackson-enums`](https://plugins.gradle.org/plugin/io.github.lowsortwizard.hilla-jackson-enums) generates the sidecar automatically from your project's compiled classes via reflection on `@JsonProperty`. Apply it in your `build.gradle.kts`:
 
 ```kotlin
 plugins {
-    id("io.github.astosolen.hilla-jackson-enums") version "0.1.0"
+    id("io.github.lowsortwizard.hilla-jackson-enums") version "0.1.0"
 }
 ```
 
